@@ -50,9 +50,18 @@ jobs:
             -d "key=${TRELLO_KEY}" \
             -d "token=${TRELLO_TOKEN}")
           
-          CARD_B_ID=$(echo "$CONVERT_RESPONSE" | jq -r '.id')
-          CARD_B_URL=$(echo "$CONVERT_RESPONSE" | jq -r '.url')
-          echo "Subtask B converted to Card with ID: $CARD_B_ID"
-          echo "Card B URL: $CARD_B_URL"
+          echo "Convert Response: $CONVERT_RESPONSE"
+          
+          # Check if response is valid JSON before parsing
+          if echo "$CONVERT_RESPONSE" | jq empty 2>/dev/null; then
+            CARD_B_ID=$(echo "$CONVERT_RESPONSE" | jq -r '.id')
+            CARD_B_URL=$(echo "$CONVERT_RESPONSE" | jq -r '.url')
+            echo "Subtask B converted to Card with ID: $CARD_B_ID"
+            echo "Card B URL: $CARD_B_URL"
+          else
+            echo "Error: Invalid response from convert endpoint"
+            echo "Response was: $CONVERT_RESPONSE"
+            exit 1
+          fi
           
           echo "✓ Complete: Card A created with Checklist containing Subtask B, then B converted to Card"
