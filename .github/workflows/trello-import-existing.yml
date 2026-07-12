@@ -17,10 +17,17 @@ jobs:
           TRELLO_LIST_ID: ${{ secrets.TRELLO_LIST_ID_TO_DO }}
           TRELLO_BOARD_ID: ${{ secrets.TRELLO_BOARD_ID }}
         run: |
-          echo "Fetching open issues..."
+          echo "Fetching all open issues..."
           issues_json=$(gh issue list --state open --limit 1000 --json number,title,body,url,author)
           
-          # Loop through each issue and send it to Trello via API
+          # Create a temporary file to store issue data
+          ISSUE_MAPPING="/tmp/issue_mapping.json"
+          echo "$issues_json" > "$ISSUE_MAPPING"
+          
+          # First pass: Create all Trello cards and build a mapping
+          echo "First pass: Creating all Trello cards..."
+          declare -A CARD_IDS
+          
           echo "$issues_json" | jq -c '.[]' | while read -r issue; do
             title=$(echo "$issue" | jq -r '.title')
             number=$(echo "$issue" | jq -r '.number')
@@ -38,72 +45,78 @@ jobs:
             encoded_desc=$(jq -nr --arg str "$desc" '$str|@uri')
             
             # Send POST request to Trello API
-            CARD_ID=$(curl -s -X POST "https://trello.com/1/cards?key=${TRELLO_KEY}&token=${TRELLO_TOKEN}&idList=${TRELLO_LIST_ID}&name=${encoded_title}&desc=${encoded_desc}" | jq -r '.id')
+            CARD_RESPONSE=$(curl -s -X POST "https://trello.com/1/cards?key=${TRELLO_KEY}&token=${TRELLO_TOKEN}&idList=${TRELLO_LIST_ID}&name=${encoded_title}&desc=${encoded_desc}")
+            CARD_ID=$(echo "$CARD_RESPONSE" | jq -r '.id // empty')
             
-            # Handle Parent-Child Issue Checklist (Subtasks)
-            if [ "$CARD_ID" != "null" ] && [ ! -z "$CARD_ID" ]; then
-              echo "Card created with ID: $CARD_ID"
+            if [ ! -z "$CARD_ID" ] && [ "$CARD_ID" != "null" ]; then
+              echo "✓ Card created for issue #${number}: $CARD_ID"
+              # Store the mapping
+              echo "#${number}:$CARD_ID" >> /tmp/card_mapping.txt
+            else
+              echo "✗ Failed to create card for issue #${number}"
+            fi
+            
+            sleep 0.3
+          done
+          
+          # Second pass: Find parent-child relationships and create checklists
+          echo ""
+          echo "Second pass: Creating checklists for parent issues..."
+          
+          echo "$issues_json" | jq -c '.[]' | while read -r issue; do
+            number=$(echo "$issue" | jq -r '.number')
+            body=$(echo "$issue" | jq -r '.body // empty')
+            
+            # Find all mentioned sub-issues (matching # followed by digits)
+            SUB_ISSUES=$(echo "$body" | grep -oE '#[0-9]+' | sed 's/#//' | sort -u)
+            
+            if [ ! -z "$SUB_ISSUES" ]; then
+              echo "Issue #${number} has sub-issues: $SUB_ISSUES"
               
-              # Find all mentioned sub-issues (matching # followed by digits)
-              SUB_ISSUES=$(echo "$body" | grep -oE '#[0-9]+' | sed 's/#//' | sort -u)
+              # Get the card ID for this parent issue
+              PARENT_CARD_ID=$(grep "^#${number}:" /tmp/card_mapping.txt | cut -d':' -f2)
               
-              echo "Found sub-issues: $SUB_ISSUES"
-              
-              if [ ! -z "$SUB_ISSUES" ]; then
-                echo "Creating checklist for sub-issues..."
+              if [ ! -z "$PARENT_CARD_ID" ]; then
+                echo "Creating checklist on card $PARENT_CARD_ID for issue #${number}..."
+                
                 # Create a Checklist named "Subtasks" on the card
-                CHECKLIST_ID=$(curl -s -X POST "https://trello.com/1/cards/${CARD_ID}/checklists?name=Subtasks&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}" | jq -r '.id')
+                CHECKLIST_RESPONSE=$(curl -s -X POST "https://trello.com/1/cards/${PARENT_CARD_ID}/checklists?name=Subtasks&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}")
+                CHECKLIST_ID=$(echo "$CHECKLIST_RESPONSE" | jq -r '.id // empty')
                 
-                echo "Checklist created with ID: $CHECKLIST_ID"
-                
-                if [ "$CHECKLIST_ID" != "null" ] && [ ! -z "$CHECKLIST_ID" ]; then
-                  # Loop through each sub-issue, find its title/URL, and add to checklist
+                if [ ! -z "$CHECKLIST_ID" ] && [ "$CHECKLIST_ID" != "null" ]; then
+                  echo "✓ Checklist created with ID: $CHECKLIST_ID"
+                  
+                  # Loop through each sub-issue and add to checklist
                   for SUB_NUM in $SUB_ISSUES; do
                     SUB_URL="https://github.com/${{ github.repository }}/issues/${SUB_NUM}"
                     
                     # Fetch sub-issue title from GitHub API
-                    SUB_TITLE=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/${{ github.repository }}/issues/${SUB_NUM}" | jq -r '.title')
+                    SUB_TITLE=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/${{ github.repository }}/issues/${SUB_NUM}" | jq -r '.title // "Unknown"')
                     
-                    echo "Processing sub-issue #${SUB_NUM}: ${SUB_TITLE}"
+                    echo "  Adding sub-issue #${SUB_NUM} to checklist..."
                     
                     # Add item to Trello Checklist
                     CHECKLIST_TEXT="[#${SUB_NUM}: ${SUB_TITLE}](${SUB_URL})"
                     CHECKLIST_ITEM_RESPONSE=$(curl -s -X POST "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems?name=$(echo -n "$CHECKLIST_TEXT" | jq -sRr @uri)&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}")
                     CHECKLIST_ITEM_ID=$(echo "$CHECKLIST_ITEM_RESPONSE" | jq -r '.id // empty')
                     
-                    echo "Checklist item response: $CHECKLIST_ITEM_RESPONSE"
-                    
-                    # Only create a separate card for the sub-issue AFTER the checklist item is created
                     if [ ! -z "$CHECKLIST_ITEM_ID" ] && [ "$CHECKLIST_ITEM_ID" != "null" ]; then
-                      echo "Added sub-issue #${SUB_NUM} to checklist. Now creating separate card..."
-                      
-                      SUB_DESC="Sub-issue of #${number}%0AURL: ${SUB_URL}%0A%0AParent: %5B%23${number}: ${title}%5D(${url})"
-                      encoded_sub_desc=$(jq -nr --arg str "$SUB_DESC" '$str|@uri')
-                      encoded_sub_title=$(jq -nr --arg str "${SUB_TITLE}" '$str|@uri')
-                      
-                      SUB_CARD_ID=$(curl -s -X POST "https://trello.com/1/cards?key=${TRELLO_KEY}&token=${TRELLO_TOKEN}&idList=${TRELLO_LIST_ID}&name=${encoded_sub_title}&desc=${encoded_sub_desc}" | jq -r '.id')
-                      
-                      if [ "$SUB_CARD_ID" != "null" ] && [ ! -z "$SUB_CARD_ID" ]; then
-                        echo "Created sub-issue card: ${SUB_CARD_ID}"
-                      else
-                        echo "Failed to create card for sub-issue #${SUB_NUM}"
-                      fi
+                      echo "  ✓ Added #${SUB_NUM} to checklist"
                     else
-                      echo "Failed to add sub-issue #${SUB_NUM} to checklist, skipping card creation"
+                      echo "  ✗ Failed to add #${SUB_NUM} to checklist"
                     fi
                     
-                    # Small pause to prevent API rate limiting
                     sleep 0.2
                   done
                 else
-                  echo "Failed to create checklist on card $CARD_ID"
+                  echo "✗ Failed to create checklist on card $PARENT_CARD_ID"
                 fi
-              else
-                echo "No sub-issues found in issue body"
               fi
             fi
             
-            # Small pause to prevent API rate limiting
-            sleep 0.5
+            sleep 0.3
           done
+          
+          echo ""
           echo "Bulk import complete!"
+          rm -f /tmp/card_mapping.txt /tmp/issue_mapping.json
