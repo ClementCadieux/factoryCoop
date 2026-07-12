@@ -10,6 +10,21 @@ jobs:
   trello_automation:
     runs-on: ubuntu-latest
     steps:
+      - name: Create a Trello Card
+        uses: TrisNol/trello-create-card-action@main
+        with:
+          api_key: ${{ secrets.TRELLO_API_KEY }}
+          token: ${{ secrets.TRELLO_TOKEN }}
+          board_id: ${{ secrets.TRELLO_BOARD_ID }}
+          list_name: "To Do"
+          card_name: "${{ github.event.issue.title }}"
+          card_description: |
+            Issue Number: #${{ github.event.issue.number }}
+            Reported by: @${{ github.event.issue.user.login }}
+            URL: ${{ github.event.issue.html_url }}
+            
+            ${{ github.event.issue.body }}
+      
       # STEP 1: Handle Branch Created -> Move to "In Progress"
       # Assumes branch name includes the issue number (e.g., feature/123-login)
       - name: Extract Issue Number from Branch
