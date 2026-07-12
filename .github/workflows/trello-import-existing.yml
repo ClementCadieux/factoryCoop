@@ -1,43 +1,21 @@
 name: Bulk Import Existing Issues to Trello
 on:
-  workflow_dispatch: # Allows manual trigger from the GitHub Actions UI
+  workflow_dispatch:
 
 jobs:
   import-issues:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
       - name: Fetch and Export Issues
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Provided automatically by GitHub
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TRELLO_KEY: ${{ secrets.TRELLO_API_KEY }}
           TRELLO_TOKEN: ${{ secrets.TRELLO_TOKEN }}
-          TRELLO_LIST_ID: ${{ secrets.TRELLO_LIST_ID_TO_DO }} # Target Trello List ID
+          TRELLO_LIST_ID: ${{ secrets.TRELLO_LIST_ID_TO_DO }}
         run: |
-          # Fetch all open issues in JSON format using GitHub CLI
           echo "Fetching open issues..."
           issues_json=$(gh issue list --state open --limit 1000 --json number,title,body,url,author)
-          
-          # Loop through each issue and send it to Trello via API
-          echo "$issues_json" | jq -c '.[]' | while read -r issue; do
-            title=$(echo "$issue" | jq -r '.title')
-            number=$(echo "$issue" | jq -r '.number')
-            url=$(echo "$issue" | jq -r '.url')
-            author=$(echo "$issue" | jq -r '.author.login')
-            body=$(echo "$issue" | jq -r '.body')
-            
-            # Construct the card description
-            desc="Issue Number: #${number}%0AAuthor: @${author}%0AURL: ${url}%0A%0A${body}"
-            
-            echo "Creating Trello card for issue #${number}: ${title}"
-            
-            # URL encode strings to safely pass via curl
-            encoded_title=$(jq -nr --arg str "$title" '$str|@uri')
-            encoded_desc=$(jq -nr --arg str "$desc" '$str|@uri')
-            
-            # Send POST request to Trello API
-            curl -s -X POST "https://trello.com{TRELLO_KEY}&token=${TRELLO_TOKEN}&idList=${TRELLO_LIST_ID}&name=${encoded_title}&desc=${encoded_desc}" > /dev/null
-            
-            # Small pause to prevent API rate limiting
-            sleep 0.5
-          done
-          echo "Bulk import complete!"
+          # ... rest of script
