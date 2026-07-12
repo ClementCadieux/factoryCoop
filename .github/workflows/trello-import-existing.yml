@@ -13,7 +13,7 @@ jobs:
           TRELLO_LIST_ID: ${{ secrets.TRELLO_LIST_ID_TO_DO }}
         run: |
           echo "Creating Card A..."
-          CARD_RESPONSE=$(curl -s -X POST \
+          CARD_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "https://trello.com/1/cards" \
             -d "key=${TRELLO_KEY}" \
             -d "token=${TRELLO_TOKEN}" \
@@ -21,56 +21,52 @@ jobs:
             -d "name=A" \
             -d "desc=Card A with subtasks")
           
+          HTTP_CODE=$(echo "$CARD_RESPONSE" | tail -1)
+          CARD_RESPONSE=$(echo "$CARD_RESPONSE" | head -n -1)
           CARD_ID=$(echo "$CARD_RESPONSE" | jq -r '.id')
-          echo "Card A created with ID: $CARD_ID"
+          echo "Card A created with ID: $CARD_ID (HTTP $HTTP_CODE)"
           
           echo "Creating Checklist on Card A..."
-          CHECKLIST_RESPONSE=$(curl -s -X POST \
+          CHECKLIST_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "https://trello.com/1/cards/${CARD_ID}/checklists" \
             -d "key=${TRELLO_KEY}" \
             -d "token=${TRELLO_TOKEN}" \
             -d "name=Subtasks")
           
+          HTTP_CODE=$(echo "$CHECKLIST_RESPONSE" | tail -1)
+          CHECKLIST_RESPONSE=$(echo "$CHECKLIST_RESPONSE" | head -n -1)
           CHECKLIST_ID=$(echo "$CHECKLIST_RESPONSE" | jq -r '.id')
-          echo "Checklist created with ID: $CHECKLIST_ID"
+          echo "Checklist created with ID: $CHECKLIST_ID (HTTP $HTTP_CODE)"
           
           echo "Adding Subtask B to Checklist..."
-          ITEM_RESPONSE=$(curl -s -X POST \
+          ITEM_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
             "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems" \
             -d "key=${TRELLO_KEY}" \
             -d "token=${TRELLO_TOKEN}" \
             -d "name=B")
           
+          HTTP_CODE=$(echo "$ITEM_RESPONSE" | tail -1)
+          ITEM_RESPONSE=$(echo "$ITEM_RESPONSE" | head -n -1)
           ITEM_ID=$(echo "$ITEM_RESPONSE" | jq -r '.id')
-          echo "Subtask B added with ID: $ITEM_ID"
+          echo "Subtask B added with ID: $ITEM_ID (HTTP $HTTP_CODE)"
           
           echo "Converting Subtask B to a Card..."
-          CONVERT_RESPONSE=$(curl -s -X POST \
+          echo "Endpoint: https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems/${ITEM_ID}/convertToCard"
+          CONVERT_RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
             "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems/${ITEM_ID}/convertToCard" \
             -d "key=${TRELLO_KEY}" \
             -d "token=${TRELLO_TOKEN}")
           
-          echo "Convert response: $CONVERT_RESPONSE"
+          HTTP_CODE=$(echo "$CONVERT_RESPONSE" | tail -1)
+          CONVERT_RESPONSE=$(echo "$CONVERT_RESPONSE" | head -n -1)
+          echo "Conversion response (HTTP $HTTP_CODE):"
+          echo "$CONVERT_RESPONSE"
           
           CARD_B_ID=$(echo "$CONVERT_RESPONSE" | jq -r '.id // empty')
           if [ -z "$CARD_B_ID" ]; then
-            echo "✗ Conversion failed. Trying alternative approach..."
-            
-            echo "Creating Card B directly in list..."
-            CARD_B_RESPONSE=$(curl -s -X POST \
-              "https://trello.com/1/cards" \
-              -d "key=${TRELLO_KEY}" \
-              -d "token=${TRELLO_TOKEN}" \
-              -d "idList=${TRELLO_LIST_ID}" \
-              -d "name=B" \
-              -d "desc=Subtask of Card A")
-            
-            CARD_B_ID=$(echo "$CARD_B_RESPONSE" | jq -r '.id')
-            echo "✓ Card B created directly with ID: $CARD_B_ID"
+            echo "✗ Conversion failed"
           else
             CARD_B_URL=$(echo "$CONVERT_RESPONSE" | jq -r '.url')
             echo "✓ Subtask B converted to Card with ID: $CARD_B_ID"
             echo "Card B URL: $CARD_B_URL"
           fi
-          
-          echo "✓ Complete: Card A created with Checklist containing Subtask B"
