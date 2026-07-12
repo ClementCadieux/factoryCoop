@@ -49,16 +49,34 @@ jobs:
                 # Create a Checklist named "Subtasks" on the card
                 CHECKLIST_ID=$(curl -X POST -s "https://trello.com/1/cards/${CARD_ID}/checklists?name=Subtasks&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}" | jq -r '.id')
                 
-                # Loop through each sub-issue, find its title/URL, and add to checklist
+                # Loop through each sub-issue, find its title/URL, and add to checklist + create separate card
                 for SUB_NUM in $SUB_ISSUES; do
-                  SUB_URL="https://github.com{{ github.repository }}/issues/${SUB_NUM}"
+                  SUB_URL="https://github.com/${{ github.repository }}/issues/${SUB_NUM}"
                   
                   # Fetch sub-issue title from GitHub API
-                  SUB_TITLE=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos{{ github.repository }}/issues/${SUB_NUM}" | jq -r '.title')
+                  SUB_TITLE=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/${{ github.repository }}/issues/${SUB_NUM}" | jq -r '.title')
                   
                   # Add item to Trello Checklist with Markdown link
                   CHECKLIST_TEXT="[#${SUB_NUM}: ${SUB_TITLE}](${SUB_URL})"
-                  curl -X POST -s "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems?name=$(echo -n "$CHECKLIST_TEXT" | jq -sRr @uri)&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}"
+                  curl -X POST -s "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems?name=$(echo -n "$CHECKLIST_TEXT" | jq -sRr @uri)&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}" > /dev/null
+                  
+                  # Create a separate card for the sub-issue
+                  echo "Creating Trello card for sub-issue #${SUB_NUM}: ${SUB_TITLE}"
+                  
+                  SUB_DESC="Sub-issue of #${number}%0AURL: ${SUB_URL}%0A%0AParent: %5B%23${number}: ${title}%5D(${url})"
+                  encoded_sub_desc=$(jq -nr --arg str "$SUB_DESC" '$str|@uri')
+                  encoded_sub_title=$(jq -nr --arg str "${SUB_TITLE}" '$str|@uri')
+                  
+                  SUB_CARD_ID=$(curl -s -X POST "https://trello.com/1/cards?key=${TRELLO_KEY}&token=${TRELLO_TOKEN}&idList=${TRELLO_LIST_ID}&name=${encoded_sub_title}&desc=${encoded_sub_desc}" | jq -r '.id')
+                  
+                  if [ "$SUB_CARD_ID" != "null" ] && [ ! -z "$SUB_CARD_ID" ]; then
+                    echo "Created sub-issue card: ${SUB_CARD_ID}"
+                  else
+                    echo "Failed to create card for sub-issue #${SUB_NUM}"
+                  fi
+                  
+                  # Small pause to prevent API rate limiting
+                  sleep 0.2
                 done
               fi
             fi
