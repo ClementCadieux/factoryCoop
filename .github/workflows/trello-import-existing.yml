@@ -15,7 +15,55 @@ jobs:
           TRELLO_KEY: ${{ secrets.TRELLO_API_KEY }}
           TRELLO_TOKEN: ${{ secrets.TRELLO_TOKEN }}
           TRELLO_LIST_ID: ${{ secrets.TRELLO_LIST_ID_TO_DO }}
+          TRELLO_BOARD_ID: ${{ secrets.TRELLO_BOARD_ID }}
         run: |
           echo "Fetching open issues..."
           issues_json=$(gh issue list --state open --limit 1000 --json number,title,body,url,author)
-          # ... rest of script
+          
+          # Loop through each issue and send it to Trello via API
+          echo "$issues_json" | jq -c '.[]' | while read -r issue; do
+            title=$(echo "$issue" | jq -r '.title')
+            number=$(echo "$issue" | jq -r '.number')
+            url=$(echo "$issue" | jq -r '.url')
+            author=$(echo "$issue" | jq -r '.author.login')
+            body=$(echo "$issue" | jq -r '.body')
+            
+            # Construct the card description
+            desc="Issue Number: #${number}%0AAuthor: @${author}%0AURL: ${url}%0A%0A${body}"
+            
+            echo "Creating Trello card for issue #${number}: ${title}"
+            
+            # URL encode strings to safely pass via curl
+            encoded_title=$(jq -nr --arg str "$title" '$str|@uri')
+            encoded_desc=$(jq -nr --arg str "$desc" '$str|@uri')
+            
+            # Send POST request to Trello API
+            CARD_ID=$(curl -s -X POST "https://trello.com/1/cards?key=${TRELLO_KEY}&token=${TRELLO_TOKEN}&idList=${TRELLO_LIST_ID}&name=${encoded_title}&desc=${encoded_desc}" | jq -r '.id')
+            
+            # Handle Parent-Child Issue Checklist (Subtasks)
+            if [ "$CARD_ID" != "null" ] && [ ! -z "$CARD_ID" ]; then
+              # Find all mentioned sub-issues (matching # followed by digits)
+              SUB_ISSUES=$(echo "$body" | grep -oE '#[0-9]+' | grep -oE '[0-9]+' || true)
+              
+              if [ ! -z "$SUB_ISSUES" ]; then
+                # Create a Checklist named "Subtasks" on the card
+                CHECKLIST_ID=$(curl -X POST -s "https://trello.com/1/cards/${CARD_ID}/checklists?name=Subtasks&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}" | jq -r '.id')
+                
+                # Loop through each sub-issue, find its title/URL, and add to checklist
+                for SUB_NUM in $SUB_ISSUES; do
+                  SUB_URL="https://github.com{{ github.repository }}/issues/${SUB_NUM}"
+                  
+                  # Fetch sub-issue title from GitHub API
+                  SUB_TITLE=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos{{ github.repository }}/issues/${SUB_NUM}" | jq -r '.title')
+                  
+                  # Add item to Trello Checklist with Markdown link
+                  CHECKLIST_TEXT="[#${SUB_NUM}: ${SUB_TITLE}](${SUB_URL})"
+                  curl -X POST -s "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems?name=$(echo -n "$CHECKLIST_TEXT" | jq -sRr @uri)&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}"
+                done
+              fi
+            fi
+            
+            # Small pause to prevent API rate limiting
+            sleep 0.5
+          done
+          echo "Bulk import complete!"
