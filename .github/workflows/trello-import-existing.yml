@@ -17,8 +17,6 @@ jobs:
           TRELLO_LIST_ID: ${{ secrets.TRELLO_LIST_ID_TO_DO }}
           TRELLO_BOARD_ID: ${{ secrets.TRELLO_BOARD_ID }}
         run: |
-          set -x
-          
           echo "Fetching all open issues..."
           issues_json=$(gh issue list --state open --limit 1000 --json number,title,body,url,author)
           
@@ -28,12 +26,15 @@ jobs:
           # Identify all sub-issues
           echo "Identifying sub-issues..."
           SUB_ISSUES=$(echo "$issues_json" | jq -r '.[] | .body // empty' | grep -oE '#[0-9]+' | sed 's/#//' | sort -u)
-          echo "Sub-issues found: $SUB_ISSUES"
           
           # Pass 1: Create root issue cards
           echo ""
           echo "=== PASS 1: Creating root issue cards ==="
-          echo "$issues_json" | jq -r '.[] | "\(.number)|\(.title)|\(.body)|\(.url)|\(.author.login)"' | while IFS='|' read -r number title body url author; do
+          while IFS= read -r line; do
+            number=$(echo "$line" | jq -r '.number')
+            title=$(echo "$line" | jq -r '.title')
+            url=$(echo "$line" | jq -r '.url')
+            author=$(echo "$line" | jq -r '.author.login')
             
             if echo "$SUB_ISSUES" | grep -q "^${number}$"; then
               echo "⊘ #${number} is a sub-issue, skipping"
@@ -55,16 +56,18 @@ jobs:
               echo "$number:$card_id:$card_url" >> "$CARD_MAPPING"
             else
               echo "✗ Failed to create card"
-              echo "Response: $card"
             fi
             
             sleep 0.3
-          done
+          done < <(echo "$issues_json" | jq -c '.[]')
           
           # Pass 2: Create checklists and sub-issue cards
           echo ""
           echo "=== PASS 2: Creating checklists and sub-issue cards ==="
-          echo "$issues_json" | jq -r '.[] | "\(.number)|\(.title)|\(.body)"' | while IFS='|' read -r number title body; do
+          while IFS= read -r line; do
+            number=$(echo "$line" | jq -r '.number')
+            title=$(echo "$line" | jq -r '.title')
+            body=$(echo "$line" | jq -r '.body // empty')
             
             if echo "$SUB_ISSUES" | grep -q "^${number}$"; then
               continue
@@ -96,14 +99,13 @@ jobs:
             
             if [ -z "$checklist_id" ] || [ "$checklist_id" = "null" ]; then
               echo "✗ Failed to create checklist"
-              echo "Response: $checklist"
               continue
             fi
             
             echo "✓ Checklist created: $checklist_id"
             
             # Process each sub-issue
-            echo "$mentioned" | while read -r sub_num; do
+            while IFS= read -r sub_num; do
               [ -z "$sub_num" ] && continue
               
               echo "  Processing sub-issue #$sub_num"
@@ -145,11 +147,10 @@ jobs:
               fi
               
               sleep 0.2
-            done
+            done < <(echo "$mentioned")
             
             sleep 0.3
-          done
+          done < <(echo "$issues_json" | jq -c '.[]')
           
           echo ""
           echo "Done!"
-          cat "$CARD_MAPPING"
