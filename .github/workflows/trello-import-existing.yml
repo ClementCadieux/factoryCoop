@@ -6,7 +6,7 @@ jobs:
   test-trello:
     runs-on: ubuntu-latest
     steps:
-      - name: Create Card A with Checklist and Subtask B, then create Card B
+      - name: Create Card A with Checklist and Subtask B, then create Card B and link them
         env:
           TRELLO_KEY: ${{ secrets.TRELLO_API_KEY }}
           TRELLO_TOKEN: ${{ secrets.TRELLO_TOKEN }}
@@ -34,16 +34,6 @@ jobs:
           CHECKLIST_ID=$(echo "$CHECKLIST_RESPONSE" | jq -r '.id')
           echo "✓ Checklist created with ID: $CHECKLIST_ID"
           
-          echo "Adding Subtask B to Checklist..."
-          ITEM_RESPONSE=$(curl -s -X POST \
-            "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems" \
-            -d "key=${TRELLO_KEY}" \
-            -d "token=${TRELLO_TOKEN}" \
-            -d "name=B")
-          
-          ITEM_ID=$(echo "$ITEM_RESPONSE" | jq -r '.id')
-          echo "✓ Subtask B added to checklist with ID: $ITEM_ID"
-          
           echo "Creating Card B..."
           CARD_B_RESPONSE=$(curl -s -X POST \
             "https://trello.com/1/cards" \
@@ -56,7 +46,20 @@ jobs:
           CARD_B_ID=$(echo "$CARD_B_RESPONSE" | jq -r '.id')
           CARD_B_URL=$(echo "$CARD_B_RESPONSE" | jq -r '.url')
           echo "✓ Card B created with ID: $CARD_B_ID"
-          echo "Card B URL: $CARD_B_URL"
+          echo "  URL: $CARD_B_URL"
+          
+          echo "Adding Subtask B to Checklist with link to Card B..."
+          # Format: name=[text](card_url)
+          CHECKLIST_TEXT="B - [Link to Card](${CARD_B_URL})"
+          ITEM_RESPONSE=$(curl -s -X POST \
+            "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems" \
+            -d "key=${TRELLO_KEY}" \
+            -d "token=${TRELLO_TOKEN}" \
+            -d "name=${CHECKLIST_TEXT}")
+          
+          ITEM_ID=$(echo "$ITEM_RESPONSE" | jq -r '.id')
+          echo "✓ Subtask B added to checklist with ID: $ITEM_ID"
+          echo "  Subtask text: $CHECKLIST_TEXT"
           
           echo ""
-          echo "✓ Complete: Card A has Checklist with Subtask B, and Card B exists as a separate card"
+          echo "✓ Complete: Card A has Checklist with Subtask B (linked to Card B URL), and Card B exists as a separate card"
