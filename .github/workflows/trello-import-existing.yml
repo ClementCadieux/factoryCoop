@@ -20,23 +20,38 @@ jobs:
           echo "Fetching all open issues..."
           issues_json=$(gh issue list --state open --limit 1000 --json number,title,body,url,author)
           
-          CARD_MAPPING="/tmp/card_mapping.txt"
-          > "$CARD_MAPPING"
+          # Create temp directory for all data
+          tmpdir=$(mktemp -d)
+          trap "rm -rf $tmpdir" EXIT
           
-          # Identify all sub-issues
+          # Extract all issues into individual files
+          echo "$issues_json" | jq -c '.[]' | while read -r issue; do
+            num=$(echo "$issue" | jq -r '.number')
+            echo "$issue" > "$tmpdir/issue_$num.json"
+          done
+          
+          # Identify sub-issues
           echo "Identifying sub-issues..."
-          SUB_ISSUES=$(echo "$issues_json" | jq -r '.[] | .body // empty' | grep -oE '#[0-9]+' | sed 's/#//' | sort -u)
+          sub_issues=""
+          for f in "$tmpdir"/issue_*.json; do
+            body=$(jq -r '.body // empty' "$f")
+            subs=$(echo "$body" | grep -oE '#[0-9]+' | sed 's/#//' | sort -u)
+            sub_issues="$sub_issues $subs"
+          done
+          sub_issues=$(echo "$sub_issues" | tr ' ' '\n' | sort -u)
           
           # Pass 1: Create root issue cards
           echo ""
           echo "=== PASS 1: Creating root issue cards ==="
-          while IFS= read -r line; do
-            number=$(echo "$line" | jq -r '.number')
-            title=$(echo "$line" | jq -r '.title')
-            url=$(echo "$line" | jq -r '.url')
-            author=$(echo "$line" | jq -r '.author.login')
+          for f in "$tmpdir"/issue_*.json; do
+            issue=$(cat "$f")
+            number=$(echo "$issue" | jq -r '.number')
+            title=$(echo "$issue" | jq -r '.title')
+            url=$(echo "$issue" | jq -r '.url')
+            author=$(echo "$issue" | jq -r '.author.login')
             
-            if echo "$SUB_ISSUES" | grep -q "^${number}$"; then
+            # Skip if sub-issue
+            if echo "$sub_issues" | grep -q "^${number}$"; then
               echo "⊘ #${number} is a sub-issue, skipping"
               continue
             fi
@@ -53,23 +68,25 @@ jobs:
             
             if [ ! -z "$card_id" ] && [ "$card_id" != "null" ]; then
               echo "✓ Created card $card_id"
-              echo "$number:$card_id:$card_url" >> "$CARD_MAPPING"
+              echo "$number:$card_id:$card_url" > "$tmpdir/card_$number.txt"
             else
               echo "✗ Failed to create card"
             fi
             
             sleep 0.3
-          done < <(echo "$issues_json" | jq -c '.[]')
+          done
           
           # Pass 2: Create checklists and sub-issue cards
           echo ""
           echo "=== PASS 2: Creating checklists and sub-issue cards ==="
-          while IFS= read -r line; do
-            number=$(echo "$line" | jq -r '.number')
-            title=$(echo "$line" | jq -r '.title')
-            body=$(echo "$line" | jq -r '.body // empty')
+          for f in "$tmpdir"/issue_*.json; do
+            issue=$(cat "$f")
+            number=$(echo "$issue" | jq -r '.number')
+            title=$(echo "$issue" | jq -r '.title')
+            body=$(echo "$issue" | jq -r '.body // empty')
             
-            if echo "$SUB_ISSUES" | grep -q "^${number}$"; then
+            # Skip if this is a sub-issue
+            if echo "$sub_issues" | grep -q "^${number}$"; then
               continue
             fi
             
@@ -83,14 +100,14 @@ jobs:
             echo "Issue #${number} has sub-issues: $mentioned"
             
             # Get parent card info
-            parent_line=$(grep "^${number}:" "$CARD_MAPPING")
-            parent_id=$(echo "$parent_line" | cut -d: -f2)
-            parent_url=$(echo "$parent_line" | cut -d: -f3)
-            
-            if [ -z "$parent_id" ]; then
+            if [ ! -f "$tmpdir/card_$number.txt" ]; then
               echo "⊘ Parent card not found"
               continue
             fi
+            
+            parent_line=$(cat "$tmpdir/card_$number.txt")
+            parent_id=$(echo "$parent_line" | cut -d: -f2)
+            parent_url=$(echo "$parent_line" | cut -d: -f3)
             
             # Create checklist
             echo "Creating checklist on $parent_id"
@@ -105,7 +122,7 @@ jobs:
             echo "✓ Checklist created: $checklist_id"
             
             # Process each sub-issue
-            while IFS= read -r sub_num; do
+            echo "$mentioned" | while read -r sub_num; do
               [ -z "$sub_num" ] && continue
               
               echo "  Processing sub-issue #$sub_num"
@@ -147,10 +164,10 @@ jobs:
               fi
               
               sleep 0.2
-            done < <(echo "$mentioned")
+            done
             
             sleep 0.3
-          done < <(echo "$issues_json" | jq -c '.[]')
+          done
           
           echo ""
           echo "Done!"
