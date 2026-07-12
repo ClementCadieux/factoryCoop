@@ -13,7 +13,7 @@ jobs:
           TRELLO_LIST_ID: ${{ secrets.TRELLO_LIST_ID_TO_DO }}
         run: |
           echo "Creating Card A..."
-          CARD_RESPONSE=$(curl -s -X POST \
+          CARD_A_RESPONSE=$(curl -s -X POST \
             "https://trello.com/1/cards" \
             -d "key=${TRELLO_KEY}" \
             -d "token=${TRELLO_TOKEN}" \
@@ -21,8 +21,10 @@ jobs:
             -d "name=A" \
             -d "desc=Card A with subtasks")
           
-          CARD_A_ID=$(echo "$CARD_RESPONSE" | jq -r '.id')
+          CARD_A_ID=$(echo "$CARD_A_RESPONSE" | jq -r '.id')
+          CARD_A_URL=$(echo "$CARD_A_RESPONSE" | jq -r '.url')
           echo "✓ Card A created with ID: $CARD_A_ID"
+          echo "  URL: $CARD_A_URL"
           
           echo "Creating Checklist on Card A..."
           CHECKLIST_RESPONSE=$(curl -s -X POST \
@@ -41,7 +43,7 @@ jobs:
             -d "token=${TRELLO_TOKEN}" \
             -d "idList=${TRELLO_LIST_ID}" \
             -d "name=B" \
-            -d "desc=Child of Card A")
+            -d "desc=Child of Card A - [Parent: Card A](${CARD_A_URL})")
           
           CARD_B_ID=$(echo "$CARD_B_RESPONSE" | jq -r '.id')
           CARD_B_URL=$(echo "$CARD_B_RESPONSE" | jq -r '.url')
@@ -49,7 +51,6 @@ jobs:
           echo "  URL: $CARD_B_URL"
           
           echo "Adding Subtask B to Checklist with link to Card B..."
-          # Format: name=[text](card_url)
           CHECKLIST_TEXT="B - [Link to Card](${CARD_B_URL})"
           ITEM_RESPONSE=$(curl -s -X POST \
             "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems" \
@@ -62,4 +63,6 @@ jobs:
           echo "  Subtask text: $CHECKLIST_TEXT"
           
           echo ""
-          echo "✓ Complete: Card A has Checklist with Subtask B (linked to Card B URL), and Card B exists as a separate card"
+          echo "✓ Complete:"
+          echo "  - Card A ($CARD_A_URL) has Checklist with Subtask B linked to Card B"
+          echo "  - Card B ($CARD_B_URL) has a back-link to Card A in its description"
