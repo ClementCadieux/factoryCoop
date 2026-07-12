@@ -20,17 +20,36 @@ jobs:
           echo "Fetching all open issues..."
           issues_json=$(gh issue list --state open --limit 1000 --json number,title,body,url,author)
           
-          # Create a temporary file to store issue data
+          # Create temporary files
           ISSUE_MAPPING="/tmp/issue_mapping.json"
-          echo "$issues_json" > "$ISSUE_MAPPING"
+          SUB_ISSUES_FILE="/tmp/sub_issues.txt"
+          CARD_MAPPING="/tmp/card_mapping.txt"
           
-          # First pass: Create all Trello cards and build a mapping
-          echo "First pass: Creating all Trello cards..."
-          declare -A CARD_IDS
+          echo "$issues_json" > "$ISSUE_MAPPING"
+          > "$SUB_ISSUES_FILE"
+          > "$CARD_MAPPING"
+          
+          # Pre-processing: Identify all sub-issues (mentioned in other issues)
+          echo "Pre-processing: Identifying sub-issues..."
+          echo "$issues_json" | jq -r '.[] | .body // empty' | grep -oE '#[0-9]+' | sed 's/#//' | sort -u > "$SUB_ISSUES_FILE"
+          
+          SUB_ISSUE_COUNT=$(wc -l < "$SUB_ISSUES_FILE")
+          echo "Found $SUB_ISSUE_COUNT sub-issues"
+          
+          # First pass: Create cards for ROOT ISSUES ONLY (not sub-issues)
+          echo ""
+          echo "First pass: Creating cards for root issues only..."
           
           echo "$issues_json" | jq -c '.[]' | while read -r issue; do
-            title=$(echo "$issue" | jq -r '.title')
             number=$(echo "$issue" | jq -r '.number')
+            
+            # Check if this issue is a sub-issue (mentioned in another issue)
+            if grep -q "^${number}$" "$SUB_ISSUES_FILE"; then
+              echo "⊘ Skipping #${number} (it's a sub-issue, will be created via checklist)"
+              continue
+            fi
+            
+            title=$(echo "$issue" | jq -r '.title')
             url=$(echo "$issue" | jq -r '.url')
             author=$(echo "$issue" | jq -r '.author.login')
             body=$(echo "$issue" | jq -r '.body // empty')
@@ -38,7 +57,7 @@ jobs:
             # Construct the card description
             desc="Issue Number: #${number}%0AAuthor: @${author}%0AURL: ${url}%0A%0A${body}"
             
-            echo "Creating Trello card for issue #${number}: ${title}"
+            echo "Creating Trello card for root issue #${number}: ${title}"
             
             # URL encode strings to safely pass via curl
             encoded_title=$(jq -nr --arg str "$title" '$str|@uri')
@@ -50,22 +69,27 @@ jobs:
             
             if [ ! -z "$CARD_ID" ] && [ "$CARD_ID" != "null" ]; then
               echo "✓ Card created for issue #${number}: $CARD_ID"
-              # Store the mapping
-              echo "#${number}:$CARD_ID" >> /tmp/card_mapping.txt
+              echo "#${number}:$CARD_ID" >> "$CARD_MAPPING"
             else
               echo "✗ Failed to create card for issue #${number}"
+              echo "$CARD_RESPONSE"
             fi
             
             sleep 0.3
           done
           
-          # Second pass: Find parent-child relationships and create checklists
+          # Second pass: Find parent-child relationships and create checklists with card conversion
           echo ""
-          echo "Second pass: Creating checklists for parent issues..."
+          echo "Second pass: Creating checklists and converting sub-issues to cards..."
           
           echo "$issues_json" | jq -c '.[]' | while read -r issue; do
             number=$(echo "$issue" | jq -r '.number')
             body=$(echo "$issue" | jq -r '.body // empty')
+            
+            # Check if this is a sub-issue (skip processing if it is)
+            if grep -q "^${number}$" "$SUB_ISSUES_FILE"; then
+              continue
+            fi
             
             # Find all mentioned sub-issues (matching # followed by digits)
             SUB_ISSUES=$(echo "$body" | grep -oE '#[0-9]+' | sed 's/#//' | sort -u)
@@ -74,7 +98,7 @@ jobs:
               echo "Issue #${number} has sub-issues: $SUB_ISSUES"
               
               # Get the card ID for this parent issue
-              PARENT_CARD_ID=$(grep "^#${number}:" /tmp/card_mapping.txt | cut -d':' -f2)
+              PARENT_CARD_ID=$(grep "^#${number}:" "$CARD_MAPPING" | cut -d':' -f2)
               
               if [ ! -z "$PARENT_CARD_ID" ]; then
                 echo "Creating checklist on card $PARENT_CARD_ID for issue #${number}..."
@@ -90,27 +114,54 @@ jobs:
                   for SUB_NUM in $SUB_ISSUES; do
                     SUB_URL="https://github.com/${{ github.repository }}/issues/${SUB_NUM}"
                     
-                    # Fetch sub-issue title from GitHub API
-                    SUB_TITLE=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/${{ github.repository }}/issues/${SUB_NUM}" | jq -r '.title // "Unknown"')
+                    # Fetch sub-issue details from GitHub API
+                    SUB_ISSUE_DATA=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/${{ github.repository }}/issues/${SUB_NUM}")
+                    SUB_TITLE=$(echo "$SUB_ISSUE_DATA" | jq -r '.title // "Unknown"')
+                    SUB_BODY=$(echo "$SUB_ISSUE_DATA" | jq -r '.body // empty')
+                    SUB_AUTHOR=$(echo "$SUB_ISSUE_DATA" | jq -r '.user.login // "Unknown"')
                     
                     echo "  Adding sub-issue #${SUB_NUM} to checklist..."
                     
                     # Add item to Trello Checklist
-                    CHECKLIST_TEXT="[#${SUB_NUM}: ${SUB_TITLE}](${SUB_URL})"
+                    CHECKLIST_TEXT="#${SUB_NUM}: ${SUB_TITLE}"
                     CHECKLIST_ITEM_RESPONSE=$(curl -s -X POST "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems?name=$(echo -n "$CHECKLIST_TEXT" | jq -sRr @uri)&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}")
                     CHECKLIST_ITEM_ID=$(echo "$CHECKLIST_ITEM_RESPONSE" | jq -r '.id // empty')
                     
                     if [ ! -z "$CHECKLIST_ITEM_ID" ] && [ "$CHECKLIST_ITEM_ID" != "null" ]; then
-                      echo "  ✓ Added #${SUB_NUM} to checklist"
+                      echo "  ✓ Added #${SUB_NUM} to checklist as item: $CHECKLIST_ITEM_ID"
+                      
+                      # Now convert the checklist item to a card
+                      echo "  Converting checklist item to card for #${SUB_NUM}..."
+                      
+                      # Create the sub-issue as a standalone card
+                      SUB_DESC="Issue Number: #${SUB_NUM}%0AAuthor: @${SUB_AUTHOR}%0AURL: ${SUB_URL}%0AParent Issue: #${number}%0A%0A${SUB_BODY}"
+                      
+                      encoded_sub_title=$(jq -nr --arg str "$SUB_TITLE" '$str|@uri')
+                      encoded_sub_desc=$(jq -nr --arg str "$SUB_DESC" '$str|@uri')
+                      
+                      SUB_CARD_RESPONSE=$(curl -s -X POST "https://trello.com/1/cards?key=${TRELLO_KEY}&token=${TRELLO_TOKEN}&idList=${TRELLO_LIST_ID}&name=${encoded_sub_title}&desc=${encoded_sub_desc}")
+                      SUB_CARD_ID=$(echo "$SUB_CARD_RESPONSE" | jq -r '.id // empty')
+                      
+                      if [ ! -z "$SUB_CARD_ID" ] && [ "$SUB_CARD_ID" != "null" ]; then
+                        echo "  ✓ Sub-issue #${SUB_NUM} created as card: $SUB_CARD_ID"
+                        echo "#${SUB_NUM}:$SUB_CARD_ID" >> "$CARD_MAPPING"
+                      else
+                        echo "  ✗ Failed to create card for sub-issue #${SUB_NUM}"
+                        echo "$SUB_CARD_RESPONSE"
+                      fi
                     else
                       echo "  ✗ Failed to add #${SUB_NUM} to checklist"
+                      echo "$CHECKLIST_ITEM_RESPONSE"
                     fi
                     
                     sleep 0.2
                   done
                 else
                   echo "✗ Failed to create checklist on card $PARENT_CARD_ID"
+                  echo "$CHECKLIST_RESPONSE"
                 fi
+              else
+                echo "⊘ Skipping sub-issue processing for #${number} (card not found)"
               fi
             fi
             
@@ -119,4 +170,4 @@ jobs:
           
           echo ""
           echo "Bulk import complete!"
-          rm -f /tmp/card_mapping.txt /tmp/issue_mapping.json
+          rm -f "$CARD_MAPPING" "$ISSUE_MAPPING" "$SUB_ISSUES_FILE"
