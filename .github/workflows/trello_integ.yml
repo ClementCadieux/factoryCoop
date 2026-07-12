@@ -40,14 +40,14 @@ jobs:
       - name: Move Card to In Progress
         if: github.event_name == 'create' && github.event.ref_type == 'branch' && steps.get_issue.outputs.issue_num != ''
         run: |
-          ISSUE_URL="https://github.com{{ github.repository }}/issues/${{ steps.get_issue.outputs.issue_num }}"
+          ISSUE_URL="https://github.com/${{ github.repository }}/issues/${{ steps.get_issue.outputs.issue_num }}"
           
           # Find Card ID on Board using Trello Search API
-          CARD_ID=$(curl -s "https://trello.com{ISSUE_URL}&idBoards=${{ secrets.TRELLO_BOARD_ID }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.cards[0].id')
+          CARD_ID=$(curl -s "https://trello.com/1/search?query=${ISSUE_URL}&idBoards=${{ secrets.TRELLO_BOARD_ID }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.cards[0].id')
           
           # Move Card using explicit Secret ID
           if [ "$CARD_ID" != "null" ] && [ ! -z "$CARD_ID" ]; then
-            curl -X PUT -s "https://trello.com{CARD_ID}?idList=${{ secrets.TRELLO_LIST_ID_IN_PROGRESS }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}"
+            curl -X PUT -s "https://trello.com/1/cards/${CARD_ID}?idList=${{ secrets.TRELLO_LIST_ID_IN_PROGRESS }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}"
           fi
 
       # STEP 2: Handle PR Opened -> Move to "In Testing"
@@ -57,11 +57,11 @@ jobs:
           # Extract linked issue from PR body (e.g., "Closes #123" or "Fixes #123")
           ISSUE_NUM=$(echo "${{ github.event.pull_request.body }}" | grep -oE '(closes|fixes) #[0-9]+' | grep -oE '[0-9]+' | head -n 1)
           if [ ! -z "$ISSUE_NUM" ]; then
-            ISSUE_URL="https://github.com{{ github.repository }}/issues/${ISSUE_NUM}"
-            CARD_ID=$(curl -s "https://trello.com{ISSUE_URL}&idBoards=${{ secrets.TRELLO_BOARD_ID }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.cards[0].id')
+            ISSUE_URL="https://github.com/${{ github.repository }}/issues/${ISSUE_NUM}"
+            CARD_ID=$(curl -s "https://trello.com/1/search?query=${ISSUE_URL}&idBoards=${{ secrets.TRELLO_BOARD_ID }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.cards[0].id')
             
             if [ "$CARD_ID" != "null" ] && [ ! -z "$CARD_ID" ]; then
-              curl -X PUT -s "https://trello.com{CARD_ID}?idList=${{ secrets.TRELLO_LIST_ID_TESTING }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}"
+              curl -X PUT -s "https://trello.com/1/cards/${CARD_ID}?idList=${{ secrets.TRELLO_LIST_ID_TESTING }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}"
             fi
           fi
 
@@ -71,11 +71,11 @@ jobs:
         run: |
           ISSUE_NUM=$(echo "${{ github.event.pull_request.body }}" | grep -oE '(closes|fixes) #[0-9]+' | grep -oE '[0-9]+' | head -n 1)
           if [ ! -z "$ISSUE_NUM" ]; then
-            ISSUE_URL="https://github.com{{ github.repository }}/issues/${ISSUE_NUM}"
-            CARD_ID=$(curl -s "https://trello.com{ISSUE_URL}&idBoards=${{ secrets.TRELLO_BOARD_ID }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.cards[0].id')
+            ISSUE_URL="https://github.com/${{ github.repository }}/issues/${ISSUE_NUM}"
+            CARD_ID=$(curl -s "https://trello.com/1/search?query=${ISSUE_URL}&idBoards=${{ secrets.TRELLO_BOARD_ID }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.cards[0].id')
             
             if [ "$CARD_ID" != "null" ] && [ ! -z "$CARD_ID" ]; then
-              curl -X PUT -s "https://trello.com{CARD_ID}?idList=${{ secrets.TRELLO_LIST_ID_DONE }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}"
+              curl -X PUT -s "https://trello.com/1/cards/${CARD_ID}?idList=${{ secrets.TRELLO_LIST_ID_DONE }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}"
             fi
           fi
 
@@ -83,30 +83,60 @@ jobs:
       - name: Add Subtasks to Parent Card
         if: github.event_name == 'issues' && github.event.action == 'opened'
         run: |
+          GH_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          TRELLO_KEY="${{ secrets.TRELLO_API_KEY }}"
+          TRELLO_TOKEN="${{ secrets.TRELLO_TOKEN }}"
+          TRELLO_BOARD_ID="${{ secrets.TRELLO_BOARD_ID }}"
+          TRELLO_LIST_ID="${{ secrets.TRELLO_LIST_ID_TO_DO }}"
+          REPO="${{ github.repository }}"
+          
           PARENT_URL="${{ github.event.issue.html_url }}"
           PARENT_BODY="${{ github.event.issue.body }}"
+          PARENT_NUMBER="${{ github.event.issue.number }}"
+          PARENT_TITLE="${{ github.event.issue.title }}"
           
           # Find all mentioned sub-issues (matching # followed by digits)
           SUB_ISSUES=$(echo "$PARENT_BODY" | grep -oE '#[0-9]+' | grep -oE '[0-9]+' || true)
           
           if [ ! -z "$SUB_ISSUES" ]; then
             # Find the Parent Trello Card
-            PARENT_CARD_ID=$(curl -s "https://trello.com{PARENT_URL}&idBoards=${{ secrets.TRELLO_BOARD_ID }}&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.cards[0].id')
+            PARENT_CARD_ID=$(curl -s "https://trello.com/1/search?query=${PARENT_URL}&idBoards=${TRELLO_BOARD_ID}&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}" | jq -r '.cards[0].id')
             
             if [ "$PARENT_CARD_ID" != "null" ] && [ ! -z "$PARENT_CARD_ID" ]; then
               # Create a Checklist named "Subtasks" on the parent card
-              CHECKLIST_ID=$(curl -X POST -s "https://trello.com{PARENT_CARD_ID}/checklists?name=Subtasks&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.id')
+              CHECKLIST_ID=$(curl -X POST -s "https://trello.com/1/cards/${PARENT_CARD_ID}/checklists?name=Subtasks&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}" | jq -r '.id')
               
-              # Loop through each sub-issue, find its title/URL, and add to checklist
+              # Loop through each sub-issue, find its title/URL, and add to checklist + create separate card
               for SUB_NUM in $SUB_ISSUES; do
-                SUB_URL="https://github.com{{ github.repository }}/issues/${SUB_NUM}"
+                SUB_URL="https://github.com/${REPO}/issues/${SUB_NUM}"
                 
-                # Fetch sub-issue markdown name from GitHub API
-                SUB_TITLE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "https://github.com{{ github.repository }}/issues/${SUB_NUM}" | jq -r '.title')
+                # Fetch sub-issue title from GitHub API
+                SUB_TITLE=$(curl -s -H "Authorization: token ${GH_TOKEN}" "https://api.github.com/repos/${REPO}/issues/${SUB_NUM}" | jq -r '.title // empty')
                 
-                # Add item to Trello Checklist with Markdown link
-                CHECKLIST_TEXT="[#${SUB_NUM}: ${SUB_TITLE}](${SUB_URL})"
-                curl -X POST -s "https://trello.com{CHECKLIST_ID}/checkItems?name=$(echo -n $CHECKLIST_TEXT | jq -sRr @uri)&key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}"
+                # Only process if we got a valid title
+                if [ ! -z "$SUB_TITLE" ] && [ "$SUB_TITLE" != "null" ]; then
+                  # Add item to Trello Checklist with Markdown link
+                  CHECKLIST_TEXT="[#${SUB_NUM}: ${SUB_TITLE}](${SUB_URL})"
+                  curl -X POST -s "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems?name=$(echo -n "$CHECKLIST_TEXT" | jq -sRr @uri)&key=${TRELLO_KEY}&token=${TRELLO_TOKEN}" > /dev/null
+                  
+                  # Create a separate card for the sub-issue
+                  echo "Creating Trello card for sub-issue #${SUB_NUM}: ${SUB_TITLE}"
+                  
+                  SUB_DESC="Sub-issue of #${PARENT_NUMBER}%0AURL: ${SUB_URL}%0A%0AParent: %5B%23${PARENT_NUMBER}: ${PARENT_TITLE}%5D(${PARENT_URL})"
+                  encoded_sub_desc=$(jq -nr --arg str "$SUB_DESC" '$str|@uri')
+                  encoded_sub_title=$(jq -nr --arg str "${SUB_TITLE}" '$str|@uri')
+                  
+                  SUB_CARD_ID=$(curl -s -X POST "https://trello.com/1/cards?key=${TRELLO_KEY}&token=${TRELLO_TOKEN}&idList=${TRELLO_LIST_ID}&name=${encoded_sub_title}&desc=${encoded_sub_desc}" | jq -r '.id')
+                  
+                  if [ "$SUB_CARD_ID" != "null" ] && [ ! -z "$SUB_CARD_ID" ]; then
+                    echo "Created sub-issue card: ${SUB_CARD_ID}"
+                  else
+                    echo "Failed to create card for sub-issue #${SUB_NUM}"
+                  fi
+                  
+                  # Small pause to prevent API rate limiting
+                  sleep 0.2
+                fi
               done
             fi
           fi
