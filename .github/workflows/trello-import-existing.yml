@@ -6,7 +6,7 @@ jobs:
   test-trello:
     runs-on: ubuntu-latest
     steps:
-      - name: Create Card A with Checklist and Subtask B
+      - name: Create Card A with Checklist, Subtask B, and Convert B to Card
         env:
           TRELLO_KEY: ${{ secrets.TRELLO_API_KEY }}
           TRELLO_TOKEN: ${{ secrets.TRELLO_TOKEN }}
@@ -44,4 +44,15 @@ jobs:
           ITEM_ID=$(echo "$ITEM_RESPONSE" | jq -r '.id')
           echo "Subtask B added with ID: $ITEM_ID"
           
-          echo "✓ Complete: Card A created with Checklist containing Subtask B"
+          echo "Converting Subtask B to a Card..."
+          CONVERT_RESPONSE=$(curl -s -X POST \
+            "https://trello.com/1/checklists/${CHECKLIST_ID}/checkItems/${ITEM_ID}/convertToCard" \
+            -d "key=${TRELLO_KEY}" \
+            -d "token=${TRELLO_TOKEN}")
+          
+          CARD_B_ID=$(echo "$CONVERT_RESPONSE" | jq -r '.id')
+          CARD_B_URL=$(echo "$CONVERT_RESPONSE" | jq -r '.url')
+          echo "Subtask B converted to Card with ID: $CARD_B_ID"
+          echo "Card B URL: $CARD_B_URL"
+          
+          echo "✓ Complete: Card A created with Checklist containing Subtask B, then B converted to Card"
