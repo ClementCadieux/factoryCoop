@@ -1,3 +1,8 @@
 [gd_scene format=3 uid="uid://c3o05dulcpx41"]
 
-[node name="BaseScene" type="Node2D" unique_id=457488238]
+[ext_resource type="TileSet" uid="uid://wpc4yhqsibr8" path="res://tile_set.tres" id="1_0il58"]
+
+[node name="map" type="Node2D" unique_id=457488238]
+
+[node name="TileMapLayer" type="TileMapLayer" parent="." unique_id=1928707927]
+tile_set = ExtResource("1_0il58")
